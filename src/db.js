@@ -28,28 +28,39 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS requests (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    campaign_id   INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
-    campaign_name TEXT,
-    ip            TEXT,
-    country       TEXT,
-    region        TEXT,
-    city          TEXT,
-    isp           TEXT,
-    is_proxy      INTEGER DEFAULT 0,
-    is_vpn        INTEGER DEFAULT 0,
-    is_hosting    INTEGER DEFAULT 0,
-    device        TEXT,
-    os            TEXT,
-    browser       TEXT,
-    approved      INTEGER NOT NULL DEFAULT 1,
-    block_reason  TEXT,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    campaign_id     INTEGER REFERENCES campaigns(id) ON DELETE SET NULL,
+    campaign_name   TEXT,
+    ip              TEXT,
+    country         TEXT,
+    region          TEXT,
+    city            TEXT,
+    isp             TEXT,
+    is_proxy        INTEGER DEFAULT 0,
+    is_vpn          INTEGER DEFAULT 0,
+    is_hosting      INTEGER DEFAULT 0,
+    device          TEXT,
+    os              TEXT,
+    browser         TEXT,
+    approved        INTEGER NOT NULL DEFAULT 1,
+    block_reason    TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE INDEX IF NOT EXISTS idx_requests_campaign ON requests(campaign_id);
   CREATE INDEX IF NOT EXISTS idx_requests_created  ON requests(created_at);
   CREATE INDEX IF NOT EXISTS idx_campaigns_slug    ON campaigns(slug);
 `);
+
+// Migrations: add new columns to existing DBs without breaking deployments
+const migrations = [
+  'ALTER TABLE requests ADD COLUMN user_agent TEXT',
+  'ALTER TABLE requests ADD COLUMN referrer TEXT',
+  'ALTER TABLE requests ADD COLUMN url_params TEXT',
+  'ALTER TABLE requests ADD COLUMN browser_version TEXT',
+];
+for (const sql of migrations) {
+  try { db.exec(sql); } catch (_) { /* column already exists, skip */ }
+}
 
 module.exports = db;

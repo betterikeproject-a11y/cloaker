@@ -16,19 +16,20 @@ function mergeParams(baseUrl, incomingQuery) {
 }
 
 function parseUa(userAgent) {
-  if (!userAgent) return { os: 'Unknown', browser: 'Unknown', device: 'desktop' };
+  if (!userAgent) return { os: 'Unknown', browser: 'Unknown', browserVersion: '', device: 'desktop' };
 
   const parser = new UAParser(userAgent);
   const result = parser.getResult();
 
   const os = result.os.name || 'Unknown';
   const browser = result.browser.name || 'Unknown';
+  const browserVersion = result.browser.version || '';
 
   let device = 'desktop';
   if (result.device.type === 'mobile') device = 'mobile';
   else if (result.device.type === 'tablet') device = 'tablet';
 
-  return { os, browser, device };
+  return { os, browser, browserVersion, device };
 }
 
 router.get('/:slug', async (req, res) => {
@@ -50,6 +51,8 @@ router.get('/:slug', async (req, res) => {
   const uaString = req.headers['user-agent'] || '';
   const uaData = parseUa(uaString);
   const originalQuery = req.query;
+  const referrer = req.headers['referer'] || req.headers['referrer'] || null;
+  const urlParams = Object.keys(originalQuery).length > 0 ? JSON.stringify(originalQuery) : null;
 
   // Campaign is inactive: send to safe page, no logging needed
   if (!campaign.status) {
@@ -74,8 +77,9 @@ router.get('/:slug', async (req, res) => {
     db.prepare(`
       INSERT INTO requests
         (campaign_id, campaign_name, ip, country, region, city, isp,
-         is_proxy, is_vpn, is_hosting, device, os, browser, approved, block_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         is_proxy, is_vpn, is_hosting, device, os, browser, browser_version,
+         approved, block_reason, user_agent, referrer, url_params)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       campaign.id,
       campaign.name,
@@ -90,8 +94,12 @@ router.get('/:slug', async (req, res) => {
       uaData.device,
       uaData.os,
       uaData.browser,
+      uaData.browserVersion,
       approved ? 1 : 0,
-      reason || null
+      reason || null,
+      uaString || null,
+      referrer,
+      urlParams
     );
   } catch (logErr) {
     console.error('[redirect] failed to log request:', logErr.message);

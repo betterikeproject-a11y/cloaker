@@ -89,11 +89,11 @@
           <tr>
             <th>Date / Time</th>
             <th>Campaign</th>
+            <th>IP</th>
             <th>Location</th>
-            <th>Device</th>
-            <th>OS</th>
+            <th>Device / OS</th>
             <th>Browser</th>
-            <th>Network</th>
+            <th>ISP</th>
             <th>Result</th>
           </tr>
         </thead>
@@ -221,6 +221,20 @@
   </div>
 </div>
 
+<!-- ── Request Detail Drawer ────────────────────────────────────────────────── -->
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawerOnOverlay(event)">
+  <div class="drawer" id="request-drawer">
+    <div class="drawer-header">
+      <div class="drawer-meta">
+        <div class="drawer-title" id="drawer-title">Request Detail</div>
+        <div class="drawer-subtitle" id="drawer-subtitle"></div>
+      </div>
+      <button class="modal-close" onclick="closeDrawer()">&times;</button>
+    </div>
+    <div id="drawer-content"></div>
+  </div>
+</div>
+
 <!-- ── Toast container ─────────────────────────────────────────────────────── -->
 <div class="toast-container" id="toast-container"></div>
 
@@ -229,6 +243,7 @@
 let currentPage = 'campaigns';
 let logsPage = 1;
 let editingId = null;
+let logRows = [];
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 function navigate(page, el) {
@@ -464,24 +479,24 @@ async function loadLogs(page) {
 
   try {
     const result = await api('GET', url);
-    const rows = result.data;
+    logRows = result.data;
 
-    if (!rows.length) {
+    if (!logRows.length) {
       tbody.innerHTML = '<tr><td colspan="8"><div class="empty-state"><p>No requests found.</p></div></td></tr>';
       document.getElementById('logs-pagination').innerHTML = '';
       return;
     }
 
-    tbody.innerHTML = rows.map(r => `
-      <tr>
+    tbody.innerHTML = logRows.map((r, i) => `
+      <tr class="clickable" onclick="openDrawer(${i})">
         <td style="white-space:nowrap;color:var(--text-muted)">${formatDate(r.created_at)}</td>
         <td>${esc(r.campaign_name || '—')}</td>
+        <td style="font-family:monospace;font-size:12px;color:var(--text-muted)">${esc(r.ip || '—')}</td>
         <td>${countryFlag(r.country)} ${esc(r.city || '')} ${esc(r.country || '')}</td>
-        <td>${deviceIcon(r.device)} ${esc(r.device || '—')}</td>
-        <td>${esc(r.os || '—')}</td>
-        <td>${esc(r.browser || '—')}</td>
-        <td>${networkBadges(r)}</td>
-        <td><span class="badge ${r.approved ? 'badge-green' : 'badge-red'}">${r.approved ? 'Approved' : 'Blocked'}</span>${r.block_reason ? `<br><small style="color:var(--text-muted)">${esc(r.block_reason)}</small>` : ''}</td>
+        <td>${deviceIcon(r.device)} ${esc(r.device || '—')} · ${esc(r.os || '—')}</td>
+        <td>${esc(r.browser || '—')}${r.browser_version ? `<small style="color:var(--text-muted)"> ${esc(r.browser_version)}</small>` : ''}</td>
+        <td style="color:var(--text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.isp || '')}">${esc(r.isp || '—')}</td>
+        <td><span class="badge ${r.approved ? 'badge-green' : 'badge-red'}">${r.approved ? 'Approved' : 'Blocked'}</span></td>
       </tr>
     `).join('');
 
@@ -489,6 +504,123 @@ async function loadLogs(page) {
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><p>Error: ${esc(e.message)}</p></div></td></tr>`;
   }
+}
+
+// ── Detail Drawer ─────────────────────────────────────────────────────────────
+function openDrawer(idx) {
+  const r = logRows[idx];
+  if (!r) return;
+
+  let params = null;
+  try { if (r.url_params) params = JSON.parse(r.url_params); } catch (_) {}
+
+  // Source detection
+  let source = 'Direct';
+  if (params && params.utm_source) source = esc(params.utm_source);
+  else if (r.referrer) source = 'Referral';
+
+  // Network flags
+  const flags = [];
+  if (r.is_proxy)   flags.push('<span class="badge badge-yellow">Proxy</span>');
+  if (r.is_vpn)     flags.push('<span class="badge badge-yellow">VPN</span>');
+  if (r.is_hosting) flags.push('<span class="badge badge-gray">Datacenter</span>');
+
+  // URL params formatted
+  const paramsText = params
+    ? Object.entries(params).map(([k, v]) => `${k} = ${v}`).join('\n')
+    : null;
+
+  document.getElementById('drawer-title').innerHTML =
+    `<span class="badge ${r.approved ? 'badge-green' : 'badge-red'}" style="font-size:13px;padding:4px 12px">${r.approved ? 'Approved' : 'Blocked'}</span>`;
+  document.getElementById('drawer-subtitle').textContent = formatDate(r.created_at);
+
+  document.getElementById('drawer-content').innerHTML = `
+    <div class="detail-section">
+      <div class="detail-section-title">Campaign</div>
+      <div class="detail-row">
+        <span class="detail-label">Name</span>
+        <span class="detail-value">${esc(r.campaign_name || '—')}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Source</span>
+        <span class="detail-value">${source}</span>
+      </div>
+      ${r.block_reason ? `<div class="detail-row">
+        <span class="detail-label">Block Reason</span>
+        <span class="detail-value" style="color:var(--danger)">${esc(r.block_reason)}</span>
+      </div>` : ''}
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-section-title">Location</div>
+      <div class="detail-row">
+        <span class="detail-label">Country</span>
+        <span class="detail-value">${countryFlag(r.country)} ${esc(r.country || '—')}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Region</span>
+        <span class="detail-value">${esc(r.region || '—')}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">City</span>
+        <span class="detail-value">${esc(r.city || '—')}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">IP</span>
+        <span class="detail-value" style="font-family:monospace;font-size:12px">${esc(r.ip || '—')}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">ISP</span>
+        <span class="detail-value">${esc(r.isp || '—')}</span>
+      </div>
+      ${flags.length ? `<div class="detail-row">
+        <span class="detail-label">Flags</span>
+        <span class="detail-value">${flags.join(' ')}</span>
+      </div>` : ''}
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-section-title">Device</div>
+      <div class="detail-row">
+        <span class="detail-label">Type</span>
+        <span class="detail-value">${deviceIcon(r.device)} ${esc(r.device || '—')}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">OS</span>
+        <span class="detail-value">${esc(r.os || '—')}</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Browser</span>
+        <span class="detail-value">${esc(r.browser || '—')}${r.browser_version ? ' <span style="color:var(--text-muted)">' + esc(r.browser_version) + '</span>' : ''}</span>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <div class="detail-section-title">Request</div>
+      <div class="detail-row">
+        <span class="detail-label">Referrer</span>
+        <span class="detail-value" style="font-size:12px">${r.referrer ? esc(r.referrer) : '—'}</span>
+      </div>
+      ${paramsText
+        ? `<div style="margin-top:8px"><div class="detail-label" style="margin-bottom:4px">URL Parameters</div><div class="detail-code">${esc(paramsText)}</div></div>`
+        : `<div class="detail-row"><span class="detail-label">URL Params</span><span class="detail-value">—</span></div>`}
+    </div>
+
+    ${r.user_agent ? `<div class="detail-section">
+      <div class="detail-section-title">User Agent</div>
+      <div class="detail-code">${esc(r.user_agent)}</div>
+    </div>` : ''}
+  `;
+
+  document.getElementById('drawer-overlay').classList.add('open');
+}
+
+function closeDrawer() {
+  document.getElementById('drawer-overlay').classList.remove('open');
+}
+
+function closeDrawerOnOverlay(e) {
+  if (e.target.id === 'drawer-overlay') closeDrawer();
 }
 
 function renderPagination(p) {
@@ -583,14 +715,6 @@ function deviceIcon(d) {
   return '💻';
 }
 
-function networkBadges(r) {
-  const parts = [];
-  if (r.is_proxy)   parts.push('<span class="badge badge-yellow">Proxy</span>');
-  if (r.is_vpn)     parts.push('<span class="badge badge-yellow">VPN</span>');
-  if (r.is_hosting) parts.push('<span class="badge badge-gray">DC</span>');
-  if (!parts.length) parts.push('<span style="color:var(--text-muted)">—</span>');
-  return parts.join(' ');
-}
 
 function copySlug(slug) {
   const url = window.location.origin + '/' + slug;
