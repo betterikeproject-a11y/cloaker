@@ -2,9 +2,23 @@
  * Evaluate campaign filters against visitor data.
  * Returns { approved: boolean, reason: string | null }
  */
-function evaluate(filters, geoData, uaData) {
+function evaluate(filters, geoData, uaData, queryParams = {}) {
   if (!filters || typeof filters !== 'object') {
     return { approved: true, reason: null };
+  }
+
+  // ── Security token check (first — fast fail before any geo/device logic) ──
+  if (filters.token_param && filters.token_param.trim()) {
+    const name     = filters.token_param.trim();
+    const expected = filters.token_value ? filters.token_value.trim() : '';
+    const actual   = queryParams[name];
+
+    if (actual === undefined || actual === null || actual === '') {
+      return { approved: false, reason: 'missing_token' };
+    }
+    if (expected && actual !== expected) {
+      return { approved: false, reason: 'invalid_token' };
+    }
   }
 
   const country = (geoData.country || 'XX').toUpperCase();

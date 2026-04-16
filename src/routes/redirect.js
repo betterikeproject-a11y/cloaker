@@ -70,7 +70,7 @@ router.get('/:slug', async (req, res) => {
   } catch (_) {}
 
   // Evaluate filters
-  const { approved, reason } = evaluate(filters, geoData, uaData);
+  const { approved, reason } = evaluate(filters, geoData, uaData, originalQuery);
 
   // Log the request
   try {
@@ -105,8 +105,14 @@ router.get('/:slug', async (req, res) => {
     console.error('[redirect] failed to log request:', logErr.message);
   }
 
+  // Strip the security token before forwarding — never expose it to offer/safe pages
+  const forwardQuery = { ...originalQuery };
+  if (filters.token_param && filters.token_param.trim()) {
+    delete forwardQuery[filters.token_param.trim()];
+  }
+
   const targetUrl = approved ? campaign.offer_url : campaign.safe_url;
-  const destination = mergeParams(targetUrl, originalQuery);
+  const destination = mergeParams(targetUrl, forwardQuery);
 
   return res.redirect(302, destination);
 });

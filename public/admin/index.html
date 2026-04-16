@@ -161,6 +161,25 @@
 
       <!-- Filters -->
       <div class="form-section">
+        <div class="form-section-title">Security Token</div>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
+          Exige um parâmetro secreto na URL. Visitas sem ele vão para a safe page.<br>
+          O parâmetro é <strong>removido</strong> antes de redirecionar para a offer page.<br>
+          Exemplo de link: <code style="color:var(--accent)">/slug?tk=meu-token</code>
+        </p>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Nome do Parâmetro <small style="color:var(--text-muted)">(ex: tk, sid, ref)</small></label>
+            <input type="text" class="form-control" id="f-token-param" placeholder="deixar vazio para desativar">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Valor Esperado <small style="color:var(--text-muted)">(opcional)</small></label>
+            <input type="text" class="form-control" id="f-token-value" placeholder="qualquer valor aceite se vazio">
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section">
         <div class="form-section-title">Geo Filters</div>
 
         <div class="form-group">
@@ -359,6 +378,8 @@ async function editCampaign(id) {
     document.getElementById('f-offer-url').value       = c.offer_url;
 
     const f = c.filters || {};
+    document.getElementById('f-token-param').value         = f.token_param || '';
+    document.getElementById('f-token-value').value         = f.token_value || '';
     document.getElementById('f-block-proxy').checked       = !!f.block_proxy;
     document.getElementById('f-block-vpn').checked         = !!f.block_vpn;
     document.getElementById('f-block-datacenter').checked  = !!f.block_datacenter;
@@ -385,7 +406,9 @@ function openCampaignModal() {
   document.getElementById('modal-title').textContent = 'New Campaign';
   document.getElementById('submit-btn').textContent  = 'Create Campaign';
   document.getElementById('campaign-form').reset();
-  document.getElementById('campaign-id').value = '';
+  document.getElementById('campaign-id').value  = '';
+  document.getElementById('f-token-param').value = '';
+  document.getElementById('f-token-value').value = '';
   setTags('allowed-countries', []);
   setTags('blocked-countries', []);
   openModal();
@@ -433,6 +456,8 @@ async function submitCampaign(e) {
     safe_url:  document.getElementById('f-safe-url').value,
     offer_url: document.getElementById('f-offer-url').value,
     filters: {
+      token_param:        document.getElementById('f-token-param').value.trim(),
+      token_value:        document.getElementById('f-token-value').value.trim(),
       allowed_countries:  allowedCountries,
       blocked_countries:  blockedCountries,
       block_proxy:        document.getElementById('f-block-proxy').checked,
@@ -548,6 +573,10 @@ function openDrawer(idx) {
       ${r.block_reason ? `<div class="detail-row">
         <span class="detail-label">Block Reason</span>
         <span class="detail-value" style="color:var(--danger)">${esc(r.block_reason)}</span>
+      </div>` : ''}
+      ${(r.block_reason === 'missing_token' || r.block_reason === 'invalid_token') ? `<div class="detail-row">
+        <span class="detail-label">Token</span>
+        <span class="detail-value" style="color:var(--warning)">Parâmetro de segurança ausente ou inválido</span>
       </div>` : ''}
     </div>
 
