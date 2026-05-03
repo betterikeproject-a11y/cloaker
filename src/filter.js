@@ -1,13 +1,43 @@
+const HEADLESS_PATTERNS = [
+  'headlesschrome', 'phantomjs', 'puppeteer', 'selenium', 'webdriver',
+  'htmlunit', 'slimerjs', 'nightmare', 'playwright', 'cypress',
+  'jsdom', 'zombie', 'mechanize', 'wget', 'curl/', 'python-requests',
+  'go-http-client', 'java/', 'okhttp', 'axios/', 'node-fetch',
+  'libwww-perl', 'lwp-trivial', 'ruby', 'scrapy', 'httpclient',
+];
+
+const KNOWN_BOTS = [
+  'googlebot', 'bingbot', 'slurp', 'duckduckbot', 'baiduspider',
+  'yandexbot', 'sogou', 'exabot', 'facebot', 'facebookexternalhit',
+  'ia_archiver', 'mj12bot', 'ahrefsbot', 'semrushbot', 'dotbot',
+  'rogerbot', 'linkdexbot', 'xovibot', 'sistrix', 'seznambot',
+  'blexbot', 'applebot', 'petalbot', 'bytespider', 'gptbot',
+  'chatgpt-user', 'claudebot', 'anthropic-ai', 'ccbot',
+  'amazonbot', 'pinterestbot', 'twitterbot', 'linkedinbot',
+  'discordbot', 'slackbot', 'telegrambot', 'whatsapp',
+  'archive.org_bot', 'heritrix', 'wget/', 'libwww',
+];
+
+const SPY_TOOLS = [
+  'adspy', 'bigspy', 'poweradspy', 'adplexity', 'anstrex',
+  'adbeat', 'whatrunswhere', 'spyfu', 'moat/', 'adbeat',
+  'facebook ads library', 'adspotyai', 'advertiserai',
+  'magicadz', 'dropispy', 'ecomhunt', 'minea',
+];
+
 /**
  * Evaluate campaign filters against visitor data.
  * Returns { approved: boolean, reason: string | null }
  */
-function evaluate(filters, geoData, uaData, queryParams = {}) {
+function evaluate(filters, geoData, uaData, queryParams = {}, headers = {}) {
   if (!filters || typeof filters !== 'object') {
     return { approved: true, reason: null };
   }
 
-  // ── Security token check (first — fast fail before any geo/device logic) ──
+  const ua = (headers['user-agent'] || '').toLowerCase();
+  const lang = (headers['accept-language'] || '').toLowerCase();
+
+  // ── Security token check ─────────────────────────────────────────────────
   if (filters.token_param && filters.token_param.trim()) {
     const name     = filters.token_param.trim();
     const expected = filters.token_value ? filters.token_value.trim() : '';
@@ -21,9 +51,46 @@ function evaluate(filters, geoData, uaData, queryParams = {}) {
     }
   }
 
+  // ── Empty User Agent ─────────────────────────────────────────────────────
+  if (filters.block_empty_ua && !ua.trim()) {
+    return { approved: false, reason: 'empty_user_agent' };
+  }
+
+  // ── No Accept-Language ───────────────────────────────────────────────────
+  if (filters.block_no_language && !lang.trim()) {
+    return { approved: false, reason: 'no_accept_language' };
+  }
+
+  // ── Headless / automation browsers ───────────────────────────────────────
+  if (filters.block_headless) {
+    for (const pattern of HEADLESS_PATTERNS) {
+      if (ua.includes(pattern)) {
+        return { approved: false, reason: `headless:${pattern}` };
+      }
+    }
+  }
+
+  // ── Known crawlers & bots ─────────────────────────────────────────────────
+  if (filters.block_known_bots) {
+    for (const bot of KNOWN_BOTS) {
+      if (ua.includes(bot)) {
+        return { approved: false, reason: `bot:${bot}` };
+      }
+    }
+  }
+
+  // ── Ad spy tools ──────────────────────────────────────────────────────────
+  if (filters.block_spy_tools) {
+    for (const tool of SPY_TOOLS) {
+      if (ua.includes(tool)) {
+        return { approved: false, reason: `spy:${tool}` };
+      }
+    }
+  }
+
+  // ── Geo ───────────────────────────────────────────────────────────────────
   const country = (geoData.country || 'XX').toUpperCase();
 
-  // Allowed countries whitelist
   if (Array.isArray(filters.allowed_countries) && filters.allowed_countries.length > 0) {
     const allowed = filters.allowed_countries.map(c => c.toUpperCase());
     if (!allowed.includes(country)) {
@@ -31,7 +98,6 @@ function evaluate(filters, geoData, uaData, queryParams = {}) {
     }
   }
 
-  // Blocked countries blacklist
   if (Array.isArray(filters.blocked_countries) && filters.blocked_countries.length > 0) {
     const blocked = filters.blocked_countries.map(c => c.toUpperCase());
     if (blocked.includes(country)) {
@@ -39,20 +105,18 @@ function evaluate(filters, geoData, uaData, queryParams = {}) {
     }
   }
 
-  // Proxy / VPN / datacenter checks
+  // ── Proxy / VPN / datacenter ──────────────────────────────────────────────
   if (filters.block_proxy && geoData.proxy) {
     return { approved: false, reason: 'proxy_detected' };
   }
-
   if (filters.block_vpn && geoData.vpn) {
     return { approved: false, reason: 'vpn_detected' };
   }
-
   if (filters.block_datacenter && geoData.hosting) {
     return { approved: false, reason: 'datacenter_detected' };
   }
 
-  // OS filters
+  // ── OS filters ────────────────────────────────────────────────────────────
   const os = (uaData.os || '').toLowerCase();
 
   if (Array.isArray(filters.allowed_os) && filters.allowed_os.length > 0) {
@@ -69,7 +133,7 @@ function evaluate(filters, geoData, uaData, queryParams = {}) {
     }
   }
 
-  // Device type filters
+  // ── Device filters ────────────────────────────────────────────────────────
   const device = (uaData.device || '').toLowerCase();
 
   if (Array.isArray(filters.allowed_devices) && filters.allowed_devices.length > 0) {

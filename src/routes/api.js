@@ -14,31 +14,57 @@ function slugify(text) {
     .replace(/^-+|-+$/g, '');
 }
 
-// ── Stats ────────────────────────────────────────────────────────────────────
+// ── Auto-cleanup: delete requests older than 7 days ───────────────────────────
+
+function runCleanup() {
+  try {
+    const info = db.prepare(
+      `DELETE FROM requests WHERE created_at < datetime('now', '-7 days')`
+    ).run();
+    if (info.changes > 0) {
+      console.log(`[cleanup] deleted ${info.changes} requests older than 7 days`);
+    }
+  } catch (err) {
+    console.error('[cleanup] error:', err.message);
+  }
+}
+
+// Run on startup and every 24 hours
+runCleanup();
+setInterval(runCleanup, 24 * 60 * 60 * 1000);
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
 
 router.get('/stats', (req, res) => {
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  // Accepts ?date=YYYY-MM-DD, defaults to today
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
+  const from = date + ' 00:00:00';
+  const to   = date + ' 23:59:59';
 
   const row = db.prepare(`
     SELECT
-      COUNT(*)                          AS total,
-      SUM(CASE WHEN approved=1 THEN 1 ELSE 0 END) AS approved,
-      SUM(CASE WHEN approved=0 THEN 1 ELSE 0 END) AS blocked
+      COUNT(*)                                                       AS total,
+      SUM(CASE WHEN approved=1 THEN 1 ELSE 0 END)                   AS approved,
+      SUM(CASE WHEN approved=0 THEN 1 ELSE 0 END)                   AS blocked,
+      SUM(CASE WHEN destination='offer_a' THEN 1 ELSE 0 END)        AS offer_a,
+      SUM(CASE WHEN destination='offer_b' THEN 1 ELSE 0 END)        AS offer_b
     FROM requests
-    WHERE created_at >= ?
-  `).get(today + ' 00:00:00');
+    WHERE created_at BETWEEN ? AND ?
+  `).get(from, to);
 
-  const total = row.total || 0;
+  const total    = row.total    || 0;
   const approved = row.approved || 0;
-  const blocked = row.blocked || 0;
-  const rate = total > 0 ? ((approved / total) * 100).toFixed(1) : '0.0';
+  const blocked  = row.blocked  || 0;
+  const offer_a  = row.offer_a  || 0;
+  const offer_b  = row.offer_b  || 0;
+  const rate     = total > 0 ? ((approved / total) * 100).toFixed(1) : '0.0';
 
-  res.json({ total, approved, blocked, approval_rate: rate });
+  res.json({ total, approved, blocked, offer_a, offer_b, approval_rate: rate, date });
 });
 
-// ── Campaigns ────────────────────────────────────────────────────────────────
+// ── Campaigns ─────────────────────────────────────────────────────────────────
 
-router.get('/campaigns', (req, res) => {
+router.get('/campaigns', (_req, res) => {
   const campaigns = db.prepare('SELECT * FROM campaigns ORDER BY created_at DESC').all();
   const parsed = campaigns.map(c => ({ ...c, filters: JSON.parse(c.filters || '{}') }));
   res.json(parsed);
@@ -51,7 +77,7 @@ router.get('/campaigns/:id', (req, res) => {
 });
 
 router.post('/campaigns', (req, res) => {
-  const { name, network, slug: rawSlug, status, safe_url, offer_url, filters } = req.body;
+  const { name, network, slug: rawSlug, status, safe_url, offer_url, offer_url_b, filters } = req.body;
 
   if (!name || !safe_url || !offer_url) {
     return res.status(400).json({ error: 'name, safe_url and offer_url are required' });
@@ -67,8 +93,8 @@ router.post('/campaigns', (req, res) => {
 
   try {
     const info = db.prepare(`
-      INSERT INTO campaigns (name, network, slug, status, safe_url, offer_url, filters)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO campaigns (name, network, slug, status, safe_url, offer_url, offer_url_b, filters)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       name,
       network || 'Other',
@@ -76,6 +102,7 @@ router.post('/campaigns', (req, res) => {
       status !== undefined ? (status ? 1 : 0) : 1,
       safe_url,
       offer_url,
+      offer_url_b || null,
       filtersJson
     );
 
@@ -90,11 +117,10 @@ router.put('/campaigns/:id', (req, res) => {
   const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
-  const { name, network, slug: rawSlug, status, safe_url, offer_url, filters } = req.body;
+  const { name, network, slug: rawSlug, status, safe_url, offer_url, offer_url_b, filters } = req.body;
 
   const slug = rawSlug ? slugify(rawSlug) : campaign.slug;
 
-  // Check slug uniqueness (excluding self)
   if (slug !== campaign.slug) {
     const existing = db.prepare('SELECT id FROM campaigns WHERE slug = ? AND id != ?').get(slug, campaign.id);
     if (existing) return res.status(400).json({ error: `Slug "${slug}" is already in use` });
@@ -105,15 +131,16 @@ router.put('/campaigns/:id', (req, res) => {
   try {
     db.prepare(`
       UPDATE campaigns
-      SET name=?, network=?, slug=?, status=?, safe_url=?, offer_url=?, filters=?
+      SET name=?, network=?, slug=?, status=?, safe_url=?, offer_url=?, offer_url_b=?, filters=?
       WHERE id=?
     `).run(
-      name || campaign.name,
-      network || campaign.network,
+      name       || campaign.name,
+      network    || campaign.network,
       slug,
       status !== undefined ? (status ? 1 : 0) : campaign.status,
-      safe_url || campaign.safe_url,
-      offer_url || campaign.offer_url,
+      safe_url   || campaign.safe_url,
+      offer_url  || campaign.offer_url,
+      offer_url_b !== undefined ? (offer_url_b || null) : campaign.offer_url_b,
       filtersJson,
       campaign.id
     );
@@ -133,36 +160,37 @@ router.delete('/campaigns/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// ── Requests ─────────────────────────────────────────────────────────────────
+// ── Requests ──────────────────────────────────────────────────────────────────
 
 router.get('/requests', (req, res) => {
-  const page = Math.max(1, parseInt(req.query.page) || 1);
-  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
-  const offset = (page - 1) * limit;
+  const page       = Math.max(1, parseInt(req.query.page)  || 1);
+  const limit      = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+  const offset     = (page - 1) * limit;
   const campaignId = req.query.campaign_id;
+  const date       = req.query.date; // YYYY-MM-DD
 
-  let where = '';
-  const params = [];
+  const conditions = [];
+  const params     = [];
 
   if (campaignId) {
-    where = 'WHERE campaign_id = ?';
+    conditions.push('campaign_id = ?');
     params.push(campaignId);
   }
+  if (date) {
+    conditions.push(`created_at BETWEEN ? AND ?`);
+    params.push(date + ' 00:00:00', date + ' 23:59:59');
+  }
+
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
   const total = db.prepare(`SELECT COUNT(*) AS cnt FROM requests ${where}`).get(...params).cnt;
-
-  const rows = db.prepare(
+  const rows  = db.prepare(
     `SELECT * FROM requests ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
   ).all(...params, limit, offset);
 
   res.json({
     data: rows,
-    pagination: {
-      page,
-      limit,
-      total,
-      pages: Math.ceil(total / limit)
-    }
+    pagination: { page, limit, total, pages: Math.ceil(total / limit) }
   });
 });
 

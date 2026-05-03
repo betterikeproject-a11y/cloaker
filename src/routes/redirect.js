@@ -9,7 +9,6 @@ const router = express.Router();
 function mergeParams(baseUrl, incomingQuery) {
   const entries = Object.entries(incomingQuery);
   if (entries.length === 0) return baseUrl;
-
   const qs = entries.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
   const sep = baseUrl.includes('?') ? '&' : '?';
   return baseUrl + sep + qs;
@@ -17,19 +16,20 @@ function mergeParams(baseUrl, incomingQuery) {
 
 function parseUa(userAgent) {
   if (!userAgent) return { os: 'Unknown', browser: 'Unknown', browserVersion: '', device: 'desktop' };
-
   const parser = new UAParser(userAgent);
   const result = parser.getResult();
-
   const os = result.os.name || 'Unknown';
   const browser = result.browser.name || 'Unknown';
   const browserVersion = result.browser.version || '';
-
   let device = 'desktop';
   if (result.device.type === 'mobile') device = 'mobile';
   else if (result.device.type === 'tablet') device = 'tablet';
-
   return { os, browser, browserVersion, device };
+}
+
+// Weighted random pick for A/B: splitA is 0-100 (% for A)
+function pickVariant(splitA) {
+  return Math.random() * 100 < splitA ? 'a' : 'b';
 }
 
 router.get('/:slug', async (req, res) => {
@@ -47,30 +47,57 @@ router.get('/:slug', async (req, res) => {
     `);
   }
 
-  const ip = getClientIp(req);
-  const uaString = req.headers['user-agent'] || '';
-  const uaData = parseUa(uaString);
+  const ip          = getClientIp(req);
+  const uaString    = req.headers['user-agent'] || '';
+  const uaData      = parseUa(uaString);
   const originalQuery = req.query;
-  const referrer = req.headers['referer'] || req.headers['referrer'] || null;
-  const urlParams = Object.keys(originalQuery).length > 0 ? JSON.stringify(originalQuery) : null;
+  const referrer    = req.headers['referer'] || req.headers['referrer'] || null;
+  const urlParams   = Object.keys(originalQuery).length > 0 ? JSON.stringify(originalQuery) : null;
 
-  // Campaign is inactive: send to safe page, no logging needed
+  // Extra headers for logging & filtering
+  const acceptLanguage   = req.headers['accept-language'] || null;
+  const secChUa          = req.headers['sec-ch-ua'] || null;
+  const secChUaPlatform  = req.headers['sec-ch-ua-platform'] || null;
+
+  // Campaign inactive → safe page, no log
   if (!campaign.status) {
-    const target = mergeParams(campaign.safe_url, originalQuery);
-    return res.redirect(302, target);
+    return res.redirect(302, mergeParams(campaign.safe_url, originalQuery));
   }
 
-  // Geo lookup
   const geoData = await lookupIp(ip);
 
-  // Parse filters
   let filters = {};
-  try {
-    filters = JSON.parse(campaign.filters);
-  } catch (_) {}
+  try { filters = JSON.parse(campaign.filters); } catch (_) {}
 
-  // Evaluate filters
-  const { approved, reason } = evaluate(filters, geoData, uaData, originalQuery);
+  const { approved, reason } = evaluate(filters, geoData, uaData, originalQuery, req.headers);
+
+  // Determine destination
+  let destination;
+  let targetUrl;
+
+  if (!approved) {
+    destination = 'safe';
+    targetUrl   = campaign.safe_url;
+  } else {
+    const abEnabled = !!filters.ab_enabled;
+    const hasUrlB   = campaign.offer_url_b && campaign.offer_url_b.trim();
+
+    if (abEnabled && hasUrlB) {
+      const splitA  = typeof filters.ab_split === 'number' ? filters.ab_split : 50;
+      const variant = pickVariant(splitA);
+      destination   = variant === 'a' ? 'offer_a' : 'offer_b';
+      targetUrl     = variant === 'a' ? campaign.offer_url : campaign.offer_url_b;
+    } else {
+      destination = 'offer_a';
+      targetUrl   = campaign.offer_url;
+    }
+  }
+
+  // Strip security token before forwarding
+  const forwardQuery = { ...originalQuery };
+  if (filters.token_param && filters.token_param.trim()) {
+    delete forwardQuery[filters.token_param.trim()];
+  }
 
   // Log the request
   try {
@@ -78,8 +105,9 @@ router.get('/:slug', async (req, res) => {
       INSERT INTO requests
         (campaign_id, campaign_name, ip, country, region, city, isp,
          is_proxy, is_vpn, is_hosting, device, os, browser, browser_version,
-         approved, block_reason, user_agent, referrer, url_params)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         approved, block_reason, user_agent, referrer, url_params,
+         destination, accept_language, sec_ch_ua, sec_ch_ua_platform)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       campaign.id,
       campaign.name,
@@ -88,8 +116,8 @@ router.get('/:slug', async (req, res) => {
       geoData.regionName,
       geoData.city,
       geoData.isp,
-      geoData.proxy ? 1 : 0,
-      geoData.vpn ? 1 : 0,
+      geoData.proxy   ? 1 : 0,
+      geoData.vpn     ? 1 : 0,
       geoData.hosting ? 1 : 0,
       uaData.device,
       uaData.os,
@@ -99,22 +127,17 @@ router.get('/:slug', async (req, res) => {
       reason || null,
       uaString || null,
       referrer,
-      urlParams
+      urlParams,
+      destination,
+      acceptLanguage,
+      secChUa,
+      secChUaPlatform
     );
   } catch (logErr) {
     console.error('[redirect] failed to log request:', logErr.message);
   }
 
-  // Strip the security token before forwarding — never expose it to offer/safe pages
-  const forwardQuery = { ...originalQuery };
-  if (filters.token_param && filters.token_param.trim()) {
-    delete forwardQuery[filters.token_param.trim()];
-  }
-
-  const targetUrl = approved ? campaign.offer_url : campaign.safe_url;
-  const destination = mergeParams(targetUrl, forwardQuery);
-
-  return res.redirect(302, destination);
+  return res.redirect(302, mergeParams(targetUrl, forwardQuery));
 });
 
 module.exports = router;

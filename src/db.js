@@ -58,6 +58,12 @@ const migrations = [
   'ALTER TABLE requests ADD COLUMN referrer TEXT',
   'ALTER TABLE requests ADD COLUMN url_params TEXT',
   'ALTER TABLE requests ADD COLUMN browser_version TEXT',
+  // v2 migrations
+  'ALTER TABLE requests ADD COLUMN destination TEXT',
+  'ALTER TABLE requests ADD COLUMN accept_language TEXT',
+  'ALTER TABLE requests ADD COLUMN sec_ch_ua TEXT',
+  'ALTER TABLE requests ADD COLUMN sec_ch_ua_platform TEXT',
+  'ALTER TABLE campaigns ADD COLUMN offer_url_b TEXT',
 ];
 for (const sql of migrations) {
   try { db.exec(sql); } catch (_) { /* column already exists, skip */ }
